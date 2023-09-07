@@ -3,12 +3,14 @@
 // https://www.pinvoke.net/default.aspx/advapi32/AdjustTokenPrivileges.html
 // https://www.pinvoke.net/default.aspx/ntdll.SYSTEM_INFORMATION_CLASS
 
+#region Using Directives
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using static System.Diagnostics.Process;
-
+#endregion
+#region Namespaces
 namespace NTPInvoke;
-
+#region Structures
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 internal struct CacheInfo
 {
@@ -44,7 +46,8 @@ internal struct TokenPrivilege
     public long PrivilegeLuid;
     public int Attributes;
 }
-
+#endregion
+#region Classes
 public static class Program
 {
     #region Constants
@@ -56,7 +59,6 @@ public static class Program
     private const int PurgeStandbyCommand = 4;
     private const int PrivilegeEnabled = 2;
     #endregion
-
     #region DLL Imports
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool LookupPrivilegeValue(string? host, string name, ref long pluid);
@@ -70,7 +72,6 @@ public static class Program
     [DllImport("psapi.dll")]
     private static extern int EmptyWorkingSet(nint processHandle);
     #endregion
-
     #region Methods
     private static void ClearWorkingSetOfAllProcesses()
     {
@@ -171,11 +172,13 @@ public static class Program
     private static void ReportError() => Console.WriteLine($"Error: {Marshal.GetLastWin32Error()}");
     private static uint PurgeStandbyList() => SetSystemInformation(PurgeStandbyCommand, MemoryListInfoClass);
     private static bool Is64BitMode() => Marshal.SizeOf(typeof(nint)) == 8;
-    #endregion
     private static void Main()
     {
         ClearWorkingSetOfAllProcesses();
         ClearFileSystemCache(true);
         Console.ReadKey();
     }
+    #endregion
 }
+#endregion
+#endregion
