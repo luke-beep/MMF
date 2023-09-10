@@ -4,12 +4,13 @@
 // https://www.pinvoke.net/default.aspx/ntdll.SYSTEM_INFORMATION_CLASS
 
 #region Using Directives
+
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using static System.Diagnostics.Process;
 #endregion
 #region Namespaces
-namespace NTPInvoke;
+namespace MMF;
 #region Structures
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 internal struct CacheInfo
@@ -46,6 +47,14 @@ internal struct TokenPrivilege
     public long PrivilegeLuid;
     public int Attributes;
 }
+
+[StructLayout(LayoutKind.Sequential)]
+struct ProcessPowerThrottlingState
+{
+    public uint Version;
+    public uint ControlMask;
+    public uint StateMask;
+}
 #endregion
 #region Classes
 public static class Program
@@ -58,6 +67,9 @@ public static class Program
     private const int MemoryListInfoClass = 0x0050;
     private const int PurgeStandbyCommand = 4;
     private const int PrivilegeEnabled = 2;
+    private const int Resolution = 5000;
+
+    private const bool SetResolution = true;
     #endregion
     #region DLL Imports
     [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
@@ -68,6 +80,13 @@ public static class Program
 
     [DllImport("ntdll.dll")]
     private static extern uint NtSetSystemInformation(int infoClass, nint info, int length);
+
+    [DllImport("ntdll.dll", EntryPoint = "NtSetTimerResolution")]
+    public static extern void NtSetTimerResolution(uint desiredResolution, bool setResolution, ref uint currentResolution);
+
+    [DllImport("ntdll.dll")]
+    public static extern int NtQueryTimerResolution(out uint minimumResolution, out uint maximumResolution, out uint currentResolution);
+
 
     [DllImport("psapi.dll")]
     private static extern int EmptyWorkingSet(nint processHandle);
@@ -168,15 +187,28 @@ public static class Program
         processes.ForEach(Console.WriteLine);
         Console.WriteLine();
     }
+
+    private static uint GetCurrentTimerResolution()
+    {
+        if (NtQueryTimerResolution(out _, out _, out var currentResolution) != 0)
+        {
+            throw new Exception("NtQueryTimerResolution failed");
+        }
+        return currentResolution;
+    }
+
     private static WindowsIdentity GetCurrentIdentity() => WindowsIdentity.GetCurrent(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
     private static void ReportError() => Console.WriteLine($"Error: {Marshal.GetLastWin32Error()}");
     private static uint PurgeStandbyList() => SetSystemInformation(PurgeStandbyCommand, MemoryListInfoClass);
     private static bool Is64BitMode() => Marshal.SizeOf(typeof(nint)) == 8;
+    [STAThread]
     private static void Main()
     {
+        var currentResolution = GetCurrentTimerResolution();
+        NtSetTimerResolution(Resolution, SetResolution, ref currentResolution);
         ClearWorkingSetOfAllProcesses();
         ClearFileSystemCache(true);
-        Console.ReadKey();
+        Thread.Sleep(int.MaxValue);
     }
     #endregion
 }
