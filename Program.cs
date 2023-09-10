@@ -74,10 +74,10 @@ public static class Program
     private static extern uint NtSetSystemInformation(int infoClass, nint info, int length);
 
     [DllImport("ntdll.dll", EntryPoint = "NtSetTimerResolution")]
-    public static extern void NtSetTimerResolution(uint desiredResolution, bool setResolution, ref uint currentResolution);
+    private static extern void NtSetTimerResolution(uint desiredResolution, bool setResolution, ref uint currentResolution);
 
     [DllImport("ntdll.dll")]
-    public static extern int NtQueryTimerResolution(out uint minimumResolution, out uint maximumResolution, out uint currentResolution);
+    private static extern int NtQueryTimerResolution(out uint minimumResolution, out uint maximumResolution, out uint currentResolution);
 
 
     [DllImport("psapi.dll")]
