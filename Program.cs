@@ -47,14 +47,6 @@ internal struct TokenPrivilege
     public long PrivilegeLuid;
     public int Attributes;
 }
-
-[StructLayout(LayoutKind.Sequential)]
-struct ProcessPowerThrottlingState
-{
-    public uint Version;
-    public uint ControlMask;
-    public uint StateMask;
-}
 #endregion
 #region Classes
 public static class Program
