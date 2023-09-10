@@ -188,7 +188,11 @@ public static class Program
         }
         return currentResolution;
     }
-
+    private static void SetTimerResolution()
+    {
+        var currentResolution = GetCurrentTimerResolution();
+        NtSetTimerResolution(Resolution, SetResolution, ref currentResolution);
+    }
     private static WindowsIdentity GetCurrentIdentity() => WindowsIdentity.GetCurrent(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
     private static void ReportError() => Console.WriteLine($"Error: {Marshal.GetLastWin32Error()}");
     private static uint PurgeStandbyList() => SetSystemInformation(PurgeStandbyCommand, MemoryListInfoClass);
@@ -196,8 +200,7 @@ public static class Program
     [STAThread]
     private static void Main()
     {
-        var currentResolution = GetCurrentTimerResolution();
-        NtSetTimerResolution(Resolution, SetResolution, ref currentResolution);
+        SetTimerResolution();
         ClearWorkingSetOfAllProcesses();
         ClearFileSystemCache(true);
         Thread.Sleep(int.MaxValue);
