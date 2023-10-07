@@ -255,15 +255,11 @@ public class Program
 
     private static Task Main()
     {
-        var t1 = new Thread(SetTimerResolution);
-        var t2 = new Thread(ClearFileSystemCache);
-        var t3 = new Thread(ClearWorkingSetOfAllProcesses);
-        var t4 = new Thread(MeasureTimerResolution);
-
-        t1.Start();
-        t2.Start();
-        t3.Start();
-        t4.Start();
+        var threads = new List<Thread> { new(SetTimerResolution), new(ClearFileSystemCache), new(ClearWorkingSetOfAllProcesses), new(MeasureTimerResolution) };
+        foreach (var t in threads)
+        {
+            t.Start();
+        }
         
         Thread.Sleep(-1);
         return Task.CompletedTask;
