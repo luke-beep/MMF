@@ -9,6 +9,10 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using static System.Diagnostics.Process;
+#pragma warning disable IDE0059
+#pragma warning disable CA1806
+#pragma warning disable SYSLIB1054
+#pragma warning disable CA1416
 
 #endregion
 
@@ -58,7 +62,7 @@ internal struct TokenPrivilege
 
 #region Classes
 
-public static class Program
+public class Program
 {
     #region Constants
 
@@ -69,7 +73,7 @@ public static class Program
     private const int MemoryListInfoClass = 0x0050;
     private const int PurgeStandbyCommand = 4;
     private const int PrivilegeEnabled = 2;
-    private const int Resolution = 5000;
+    private const int Resolution = 5007;
 
     private const bool SetResolution = true;
 
@@ -103,7 +107,133 @@ public static class Program
 
     #region Methods
 
-    private static void ClearWorkingSetOfAllProcesses()
+    private static Task<WindowsIdentity> GetCurrentIdentity()
+    {
+        return Task.FromResult(WindowsIdentity.GetCurrent(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges));
+    }
+
+    private static async Task ReportError()
+    {
+        await Console.Out.WriteLineAsync($"Error: {Marshal.GetLastWin32Error()}");
+    }
+
+    private static Task<uint> PurgeStandbyList()
+    {
+        return Task.FromResult(SetSystemInformation(PurgeStandbyCommand, MemoryListInfoClass).Result);
+    }
+
+    private static Task<bool> Is64BitMode()
+    {
+        return Task.FromResult(Marshal.SizeOf(typeof(nint)) == 8);
+    }
+
+    private static Task<uint> ClearCacheFor32Bit()
+    {
+        var cacheInfo = new CacheInfo
+        {
+            MinWorkingSet = uint.MaxValue,
+            MaxWorkingSet = uint.MaxValue
+        };
+        return Task.FromResult(SetSystemInformation(cacheInfo, FileInfoClass).Result);
+    }
+
+    private static Task<uint> ClearCacheFor64Bit()
+    {
+        var cacheInfo = new CacheInfo64Bit
+        {
+            MinWorkingSet = -1L,
+            MaxWorkingSet = -1L
+        };
+        return Task.FromResult<uint>(SetSystemInformation(cacheInfo, FileInfoClass).Result);
+    }
+
+    private static Task<uint> SetSystemInformation<T>(T data, int infoClass)
+    {
+        var gcHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
+        var result = NtSetSystemInformation(infoClass, gcHandle.AddrOfPinnedObject(), Marshal.SizeOf<T>());
+        gcHandle.Free();
+        return Task.FromResult(result);
+    }
+
+    private static async Task<bool> AdjustPrivilege(string privilegeName)
+    {
+        var current = GetCurrentIdentity();
+        var tokenPrivilege = new TokenPrivilege
+        {
+            PrivilegeCount = 1,
+            Attributes = PrivilegeEnabled
+        };
+
+        if (LookupPrivilegeValue(null, privilegeName, ref tokenPrivilege.PrivilegeLuid))
+            return await Task.FromResult(AdjustTokenPrivileges(current.Result.Token, false, ref tokenPrivilege, 0, nint.Zero, nint.Zero));
+
+        await ReportError();
+        current.Dispose();
+        return await Task.FromResult(false);
+    }
+
+    private static async Task DisplayProcessResults(string header, List<string> processes)
+    {
+        await Console.Out.WriteLineAsync($"{header}: {processes.Count}");
+        await Console.Out.WriteLineAsync(new string('-', header.Length + 2 + processes.Count.ToString().Length)); // Math!
+        processes.ForEach(Console.Out.WriteLine);
+        Console.WriteLine();
+    }
+
+    private static Task<uint> GetCurrentTimerResolution()
+    {
+        if (NtQueryTimerResolution(out _, out _, out var currentResolution) != 0)
+            throw new Exception("NtQueryTimerResolution failed");
+        return Task.FromResult(currentResolution);
+    }
+
+    private static void SetTimerResolution()
+    {
+        var currentResolution = GetCurrentTimerResolution();
+        var result = currentResolution.Result;
+        NtSetTimerResolution(Resolution, SetResolution, ref result);
+    }
+
+    private static async void MeasureTimerResolution()
+    {
+        for (;;)
+        {
+            if (NtQueryTimerResolution(out var minimumResolution, out var maximumResolution,
+                    out var currentResolution) != 0)
+            {
+                await Console.Out.WriteLineAsync("NtQueryTimerResolution failed");
+                return;
+            }
+            var stopwatch = new Stopwatch();
+
+            stopwatch.Start();
+            Thread.Sleep(1);
+            stopwatch.Stop();
+
+            var deltaMs = stopwatch.Elapsed.TotalMilliseconds;
+            var deltaFromSleep = deltaMs - 1;
+
+            await Console.Out.WriteLineAsync($"Resolution: {currentResolution / 10000.0}ms, Sleep(1) slept {deltaMs}ms (delta: {deltaFromSleep})");
+            Thread.Sleep(1000);
+        }
+    }
+
+    private static async void ClearFileSystemCache()
+    {
+        if (AdjustPrivilege(IncreaseQuotaPrivilege).Result)
+        {
+            var result = Is64BitMode().Result ? ClearCacheFor64Bit() : ClearCacheFor32Bit();
+            if (result.Result != 0) await ReportError();
+        }
+
+        if (!AdjustPrivilege(ProfileSingleProcessPrivilege).Result) return;
+        {
+            var result = PurgeStandbyList();
+            if (result.Result != 0) await ReportError();
+        }
+    }
+
+    private static async void ClearWorkingSetOfAllProcesses()
     {
         var successfullyClearedProcesses = new List<string>();
         var unsuccessfullyClearedProcesses = new List<string>();
@@ -119,150 +249,24 @@ public static class Program
                 unsuccessfullyClearedProcesses.Add($"{process.ProcessName}: {ex.Message}");
             }
 
-        DisplayProcessResults("Successfully Cleared Processes", successfullyClearedProcesses);
-        DisplayProcessResults("Unsuccessfully Cleared Processes", unsuccessfullyClearedProcesses);
+        await DisplayProcessResults("Successfully Cleared Processes", successfullyClearedProcesses);
+        await DisplayProcessResults("Unsuccessfully Cleared Processes", unsuccessfullyClearedProcesses);
     }
 
-    private static void ClearFileSystemCache()
+    private static Task Main()
     {
-        if (AdjustPrivilege(IncreaseQuotaPrivilege))
-        {
-            var result = Is64BitMode() ? ClearCacheFor64Bit() : ClearCacheFor32Bit();
-            if (result != 0) ReportError();
-        }
-
-        if (!AdjustPrivilege(ProfileSingleProcessPrivilege)) return;
-        {
-            var result = PurgeStandbyList();
-            if (result != 0) ReportError();
-        }
-    }
-
-    private static uint ClearCacheFor32Bit()
-    {
-        var cacheInfo = new CacheInfo
-        {
-            MinWorkingSet = uint.MaxValue,
-            MaxWorkingSet = uint.MaxValue
-        };
-        return SetSystemInformation(cacheInfo, FileInfoClass);
-    }
-
-    private static uint ClearCacheFor64Bit()
-    {
-        var cacheInfo = new CacheInfo64Bit
-        {
-            MinWorkingSet = -1L,
-            MaxWorkingSet = -1L
-        };
-        return SetSystemInformation(cacheInfo, FileInfoClass);
-    }
-
-    private static uint SetSystemInformation<T>(T data, int infoClass)
-    {
-        var gcHandle = GCHandle.Alloc(data, GCHandleType.Pinned);
-        var result = NtSetSystemInformation(infoClass, gcHandle.AddrOfPinnedObject(), Marshal.SizeOf<T>());
-        gcHandle.Free();
-        return result;
-    }
-
-    private static bool AdjustPrivilege(string privilegeName)
-    {
-        var current = GetCurrentIdentity();
-        var tokenPrivilege = new TokenPrivilege
-        {
-            PrivilegeCount = 1,
-            Attributes = PrivilegeEnabled
-        };
-
-        if (LookupPrivilegeValue(null, privilegeName, ref tokenPrivilege.PrivilegeLuid))
-            return AdjustTokenPrivileges(current.Token, false, ref tokenPrivilege, 0, nint.Zero, nint.Zero);
-
-        ReportError();
-        current.Dispose();
-        return false;
-    }
-
-    private static void DisplayProcessResults(string header, List<string> processes)
-    {
-        Console.WriteLine($"{header}: {processes.Count}");
-        Console.WriteLine(new string('-', header.Length + 2 + processes.Count.ToString().Length));
-        processes.ForEach(Console.WriteLine);
-        Console.WriteLine();
-    }
-
-    private static uint GetCurrentTimerResolution()
-    {
-        if (NtQueryTimerResolution(out _, out _, out var currentResolution) != 0)
-            throw new Exception("NtQueryTimerResolution failed");
-        return currentResolution;
-    }
-
-    private static void SetTimerResolution()
-    {
-        var currentResolution = GetCurrentTimerResolution();
-        NtSetTimerResolution(Resolution, SetResolution, ref currentResolution);
-    }
-
-    private static void MeasureTimerResolution()
-    {
-        for (var i = 1;; i++)
-        {
-            if (NtQueryTimerResolution(out var minimumResolution, out var maximumResolution,
-                    out var currentResolution) != 0)
-            {
-                Console.WriteLine("NtQueryTimerResolution failed");
-                return;
-            }
-            var stopwatch = new Stopwatch();
-
-            stopwatch.Start();
-            Thread.Sleep(1);
-            stopwatch.Stop();
-
-            var deltaMs = stopwatch.Elapsed.TotalMilliseconds;
-            var deltaFromSleep = deltaMs - 1;
-
-            Console.WriteLine(
-                $"Resolution: {currentResolution / 10000.0}ms, Sleep(1) slept {deltaMs}ms (delta: {deltaFromSleep})");
-            Thread.Sleep(1000);
-        }
-    }
-
-    private static WindowsIdentity GetCurrentIdentity()
-    {
-        return WindowsIdentity.GetCurrent(TokenAccessLevels.Query | TokenAccessLevels.AdjustPrivileges);
-    }
-
-    private static void ReportError()
-    {
-        Console.WriteLine($"Error: {Marshal.GetLastWin32Error()}");
-    }
-
-    private static uint PurgeStandbyList()
-    {
-        return SetSystemInformation(PurgeStandbyCommand, MemoryListInfoClass);
-    }
-
-    private static bool Is64BitMode()
-    {
-        return Marshal.SizeOf(typeof(nint)) == 8;
-    }
-
-    [STAThread]
-    private static void Main()
-    {
-        var t1 = new Thread(MeasureTimerResolution);
-        var t2 = new Thread(SetTimerResolution);
+        var t1 = new Thread(SetTimerResolution);
+        var t2 = new Thread(ClearFileSystemCache);
         var t3 = new Thread(ClearWorkingSetOfAllProcesses);
-        var t4 = new Thread(ClearFileSystemCache);
+        var t4 = new Thread(MeasureTimerResolution);
+
         t1.Start();
         t2.Start();
         t3.Start();
         t4.Start();
         
-
-        Thread.Sleep(int.MaxValue);
+        Thread.Sleep(-1);
+        return Task.CompletedTask;
     }
 
     #endregion
